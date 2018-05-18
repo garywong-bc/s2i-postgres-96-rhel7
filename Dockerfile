@@ -1,39 +1,55 @@
+#
+# example Dockerfile for https://docs.docker.com/examples/postgresql_service/
+#
 
-# postgres-96-rhel7
-FROM openshift/base-centos7
+FROM ubuntu
+MAINTAINER garywong@gov.bc.ca
 
-# TODO: Put the maintainer name in the image metadata
-# MAINTAINER Your Name <your@email.com>
+# GW Missing..
+RUN apt-get update && apt-get install -y gnupg apt-utils
 
-# TODO: Rename the builder environment variable to inform users about application you provide them
-# ENV BUILDER_VERSION 1.0
+# Add the PostgreSQL PGP key to verify their Debian packages.
+# It should be the same key as https://www.postgresql.org/media/keys/ACCC4CF8.asc
+RUN apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
 
-# TODO: Set labels used in OpenShift to describe the builder image
-#LABEL io.k8s.description="Platform for building xyz" \
-#      io.k8s.display-name="builder x.y.z" \
-#      io.openshift.expose-services="8080:http" \
-#      io.openshift.tags="builder,x.y.z,etc."
+# Add PostgreSQL's repository. It contains the most recent stable release
+#     of PostgreSQL, ``9.3``.
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ precise-pgdg main" > /etc/apt/sources.list.d/pgdg.list
 
-# TODO: Install required packages here:
-# RUN yum install -y ... && yum clean all -y
-RUN yum install -y rubygems && yum clean all -y
-RUN gem install asdf
+# Install ``python-software-properties``, ``software-properties-common`` and PostgreSQL 9.3
+#  There are some warnings (in red) that show up during the build. You can hide
+#  them by prefixing each apt-get statement with DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y software-properties-common postgresql-9.3 postgresql-client-9.3 postgresql-contrib-9.3
 
-# TODO (optional): Copy the builder files into /opt/app-root
-# COPY ./<builder_folder>/ /opt/app-root/
+# Note: The official Debian and Ubuntu images automatically ``apt-get clean``
+# after each ``apt-get``
 
-# TODO: Copy the S2I scripts to /usr/libexec/s2i, since openshift/base-centos7 image
-# sets io.openshift.s2i.scripts-url label that way, or update that label
-COPY ./s2i/bin/ /usr/libexec/s2i
+# Run the rest of the commands as the ``postgres`` user created by the ``postgres-9.3`` package when it was ``apt-get installed``
+USER postgres
 
-# TODO: Drop the root user and make the content of /opt/app-root owned by user 1001
-# RUN chown -R 1001:1001 /opt/app-root
+# Create a PostgreSQL role named ``docker`` with ``docker`` as the password and
+# then create a database `docker` owned by the ``docker`` role.
+# Note: here we use ``&&\`` to run commands one after the other - the ``\``
+#       allows the RUN command to span multiple lines.
+RUN    /etc/init.d/postgresql start &&\
+    psql --command "CREATE USER docker WITH SUPERUSER PASSWORD 'docker';" &&\
+    createdb -O docker docker
 
-# This default user is created in the openshift/base-centos7 image
+# Adjust PostgreSQL configuration so that remote connections to the
+# database are possible.
+RUN echo "host all  all    0.0.0.0/0  md5" >> /etc/postgresql/9.3/main/pg_hba.conf
+
+# And add ``listen_addresses`` to ``/etc/postgresql/9.3/main/postgresql.conf``
+RUN echo "listen_addresses='*'" >> /etc/postgresql/9.3/main/postgresql.conf
+
+# Expose the PostgreSQL port
+EXPOSE 5432
+
+# Add VOLUMEs to allow backup of config, logs and databases
+VOLUME  ["/etc/postgresql", "/var/log/postgresql", "/var/lib/postgresql"]
+
+# GW Standard OpenShift user
 USER 1001
 
-# TODO: Set the default port for applications built using this image
-# EXPOSE 8080
-
-# TODO: Set the default CMD for the image
-# CMD ["/usr/libexec/s2i/usage"]
+# Set the default command to run when starting the container
+CMD ["/usr/lib/postgresql/9.3/bin/postgres", "-D", "/var/lib/postgresql/9.3/main", "-c", "config_file=/etc/postgresql/9.3/main/postgresql.conf"]
